@@ -195,70 +195,53 @@ async def send_request(
     ts = datetime.now(timezone.utc)
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
     status_code = None
-    error_msg = None
-    token_latencies = []  # Initialize here
-    time_to_first = 0.0  # Initialize here
-    
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            while True:
-                async with session.post(api_url, headers=headers, json=pload) as response:
-                    status_code = response.status
-                    response_status = "success" if status_code == 200 else "failed"
-                    
-                    # Capture error response for non-200 status codes
-                    if status_code != 200:
-                        error_response = await response.text()
-                        try:
-                            error_json = json.loads(error_response)
-                            error_msg = error_json.get('error', error_response)
-                        except:
-                            error_msg = error_response
-                        print_err(f"Request {idx} failed with status {status_code}: {error_msg}")
-                        break
-
-                    chunks = []
-                    previous_token_time = time.perf_counter()
-                    first = True
-                    
-                    try:
-                        if streaming:
-                            async for chunk, _ in response.content.iter_chunks():
-                                chunks = [chunk]
-                                now_time = time.perf_counter()
-                                if first:
-                                    time_to_first = now_time - previous_token_time
-                                    first = False
-                                else:
-                                    token_latencies.append(now_time - previous_token_time)
-                                previous_token_time = now_time
-                                # Stream off: Chunks are full response.
-                                # chunks.append(chunk)
-
-                            output = b"".join(chunks).decode("utf-8")
-                            santicized = output.rstrip("\n\t ")
-                        else:
-                            time_to_first = time.perf_counter() - previous_token_time
-                            output = await response.text()
-                            santicized = output
-                    except Exception as e:
-                        error_msg = f"Failed to read response: {str(e)}"
-                        print_err(f"Failed to read response for request {idx}: {e}")
-                        break
-
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while True:
+            # print(f"Sending request: {api_url}:{pload}")
+            async with session.post(api_url, headers=headers, json=pload) as response:
+                status_code = response.status
+                chunks = []
+                token_latencies = []
+                previous_token_time = time.perf_counter()
+                first = True
                 try:
-                    ret = load_response(santicized)
-                    if "error" not in ret:
-                        break
-                    error_msg = f"API error: {ret.get('error', 'Unknown error')}"
+                    if streaming:
+                        async for chunk, _ in response.content.iter_chunks():
+                            # Stream on: Each chunk in the response is the full response so far
+                            chunks = [chunk]
+
+                            now_time = time.perf_counter()
+                            if first:
+                                time_to_first = now_time - previous_token_time
+                                first = False
+                            else:
+                                token_latencies.append(now_time - previous_token_time)
+                            previous_token_time = now_time
+
+                            # Stream off: Chunks are full response.
+                            # chunks.append(chunk)
+
+                        output = b"".join(chunks).decode("utf-8")
+                        santicized = output.rstrip(
+                            "\n\t "
+                        )  # Remove trailing whitespace characters including EOF, and "[DONE]"
+                    else:
+                        time_to_first = time.perf_counter() - previous_token_time
+                        output = await response.text()
+                        santicized = output
                 except Exception as e:
-                    error_msg = f"Failed to parse response: {str(e)}"
-                    print_err(f"Invalid response for request {idx}: {santicized}: {e}")
+                    print_err(f"Failed to read response for request {idx}: {e}")
                     break
-    except Exception as e:
-        # It's ok to parse failure, santicized output could be jsonl, other format, or internal error.
-        print_err(f"Invalid response for request {idx}: {santicized}: {e}")
-        return
+            try:
+                ret = load_response(santicized)
+
+                # Re-send the request if it failed.
+                if "error" not in ret:
+                    break
+            except Exception as e:
+                # It's ok to parse failure, santicized output could be jsonl, other format, or internal error.
+                print_err(f"Invalid response for request {idx}: {santicized}: {e}")
+                break
 
     request_end_time = time.perf_counter()
     request_latency = request_end_time - request_start_time
@@ -272,18 +255,15 @@ async def send_request(
             else len(token_latencies) + 1,
             "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S %Z%z"),
             "E2E": request_latency,
-            "status_code": status_code,
-            "success": status_code == 200 if status_code else False,
-            # "request_payload": pload
+            "status_code": status_code,  # Add status code to trace
+            "success": status_code == 200 if status_code else False  # Add success flag
         }
-        if error_msg:
-            request_trace["error"] = error_msg
         if len(token_latencies) > 0:
             request_trace["TTFT"] = time_to_first
-            request_trace["TPOT_mean"] = np.mean(token_latencies)
-            request_trace["TPOT_P50"] = np.percentile(token_latencies, 50)
-            request_trace["TPOT_P90"] = np.percentile(token_latencies, 90)
-            request_trace["TPOT_P99"] = np.percentile(token_latencies, 99)
+            request_trace["TPOT_mean"] = np.mean(token_latencies)  # type: ignore
+            request_trace["TPOT_P50"] = np.percentile(token_latencies, 50)  # type: ignore
+            request_trace["TPOT_P90"] = np.percentile(token_latencies, 90)  # type: ignore
+            request_trace["TPOT_P99"] = np.percentile(token_latencies, 99)  # type: ignore
         print(json.dumps(request_trace))
     REQUEST_LATENCY.append((prompt_len, output_len, request_latency))
     if len(token_latencies) > 0:
@@ -336,6 +316,10 @@ async def benchmark(
 
 
 def main(args: argparse.Namespace):
+    # Set global temperature from args
+    global TEMPERATURE
+    TEMPERATURE = args.temperature
+    
     result = {}
     if args.verbose:
         print(args)
@@ -345,6 +329,7 @@ def main(args: argparse.Namespace):
         result["request_rate"] = args.request_rate
         result["seed"] = args.seed
         result["model"] = args.model
+        result["temperature"] = args.temperature  
         result["samples"] = args.num_prompts
 
     random.seed(args.seed)
@@ -524,5 +509,11 @@ if __name__ == "__main__":
         help="Path to a JSON file containing prompts",
     )
     parser.add_argument("--use-workload-interval", action="store_true")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Temperature for text generation (default: 0.0)",
+    )
     args = parser.parse_args()
     main(args)

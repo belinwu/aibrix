@@ -18,8 +18,9 @@
 PATH_PREFIX=`dirname "$0"`
 FILE_NAME="result"
 MODEL="llama2-7b"
+TEMPERATURE=0.0  
 
-TOTAL=100 
+TOTAL=100
 # TODO: Set your preferred request sizes and rates here.
 input_start=4
 input_limit=$((2**11)) # 2K
@@ -29,10 +30,6 @@ rate_start=1
 rate_limit=$((2**6)) # 64
 workload=
 dry_run=0
-
-debug_print() {
-    echo "[DEBUG] $1"
-}
 
 
 # Function to generate workload for specific input/output lengths
@@ -48,19 +45,8 @@ generate_workload() {
     echo "  api_key: $api_key"
     echo "  num_prompts: $num_prompts"
     echo "  model: $model"
-    echo "Generating workload for input=$input_len, output=$output_len, API_KEY=$api_key, num_prompts=$num_prompts, model=$model"
-
-    echo "python $PATH_PREFIX/gen_benchmark_prompt.py \
-        $workload  \
-        --input-tokens \"$input_len\" \
-        --min-output-tokens \"$output_len\" \
-        --tolerance \"0.2\" \
-        --qps \"2.0\" \
-        --host \"localhost\" \
-        --port \"8010\" \
-        --api-key \"$api_key\" \
-        --total-prompts \"$num_prompts\" \
-        --model \"$model\""
+    echo "  temperature: $TEMPERATURE"
+    echo "Generating workload for input=$input_len, output=$output_len, API_KEY=$api_key, num_prompts=$num_prompts, model=$model, temperature=$TEMPERATURE"
 
     python $PATH_PREFIX/gen_benchmark_prompt.py \
         $workload  \
@@ -72,15 +58,14 @@ generate_workload() {
         --port "8010" \
         --api-key "$api_key" \
         --total-prompts "$num_prompts" \
-        --model "$model"
+        --model "$model" \
+        --temperature "$TEMPERATURE"
 }
 
 while [[ $# -gt 0 ]]; do
-  debug_print "Processing argument: $1"
   case "$1" in
     -m|--model)
       MODEL=$2
-      debug_print "Set MODEL to: $MODEL"
       shift 2
       ;;
     -o|--output)
@@ -89,32 +74,26 @@ while [[ $# -gt 0 ]]; do
       ;;
     --input-start)
       input_start=$2
-      debug_print "Set input_start to: $input_start"
       shift 2
       ;;
     --input-limit)
       input_limit=$2
-      debug_print "Set input_limit to: $input_limit"
       shift 2
       ;;
     --output-start)
       output_start=$2
-      debug_print "Set output_start to: $output_start"
       shift 2
       ;;
     --output-limit)
       output_limit=$2
-      debug_print "Set output_limit to: $output_limit"
       shift 2
       ;;
     --rate-start)
       rate_start=$2
-      debug_print "Set rate_start to: $rate_start"
       shift 2
       ;;
     --rate-limit)
       rate_limit=$2
-      debug_print "Set rate_limit to: $rate_limit"
       shift 2
       ;;
     --dry-run)
@@ -123,12 +102,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --api-key)
       LLM_API_KEY=$2
-      debug_print "Set LLM_API_KEY to: $LLM_API_KEY"
+      shift 2
+      ;;
+    --temperature)
+      TEMPERATURE=$2
       shift 2
       ;;
     --workload)
       workload="--workload_dataset_file $2"
-      debug_print "Set workload to: $workload"
       shift 2
       ;;
     # *)
@@ -137,14 +118,6 @@ while [[ $# -gt 0 ]]; do
     #   ;;
   esac
 done
-
-# Add debug prints for initial parameters
-debug_print "Initial parameters:"
-debug_print "MODEL: $MODEL"
-debug_print "Input range: $input_start to $input_limit"
-debug_print "Output range: $output_start to $output_limit"
-debug_print "Rate range: $rate_start to $rate_limit"
-debug_print "Workload file: $workload"
 
 
 # Make sure the directory exists and clear output file
@@ -186,7 +159,7 @@ while [[ $input_len -le $input_limit ]]; do
 
       WORKLOAD_FILE="$PROMPT_DIR/prompt_in${input_len}_out${output_len}.json"
       if [[ -f "$WORKLOAD_FILE" ]]; then
-        python $PATH_PREFIX/gpu_benchmark.py --backend=vllm --port 8010 --model=$MODEL --request-rate=$actual_rate --num-prompts=$TOTAL --input-len $input_len --output-len $output_len --api-key "$LLM_API_KEY" --workload_dataset_file $WORKLOAD_FILE >> "$OUTPUT_FILE" 
+        python $PATH_PREFIX/gpu_benchmark.py --backend=vllm --port 8010 --model=$MODEL --request-rate=$actual_rate --num-prompts=$TOTAL --input-len $input_len --output-len $output_len --api-key "$LLM_API_KEY" --temperature "$TEMPERATURE" --workload_dataset_file "$WORKLOAD_FILE" --stream >> "$OUTPUT_FILE" 
       fi
       req_rate=$((req_rate * 2)) 
     done

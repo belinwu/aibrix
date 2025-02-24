@@ -10,7 +10,7 @@ import os
 
 def get_tokenizer(
         pretrained_model_name_or_path: str, trust_remote_code: bool
-) -> Any:  # Changed return type to Any since we're returning a different tokenizer type
+) -> Any:  
     """Get tiktoken tokenizer."""
     try:
         # Use cl100k_base for ChatGPT-style models
@@ -115,7 +115,7 @@ class PromptSelector:
         # Sort candidates by input difference
         candidates.sort(key=lambda x: x[2])
         
-        # If max_candidates is not specified, use all candidates
+        # If max_candidates is not specified, use all candidates or choosing the first max_candidates number of candidates
         if max_candidates is not None:
             candidates = candidates[:max_candidates]
         
@@ -131,7 +131,7 @@ class PromptSelector:
             
             if output_tokens and output_tokens >= min_output_tokens:
                 matching_prompts.append((prompt, input_tokens, output_tokens, response_data))
-                break  # We found our match, we can stop
+                break  #No match found, stop the loop
             
             print("-" * 80)
         
@@ -148,7 +148,6 @@ class PromptSelector:
 
         # Get the directory where the script is located
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        
         # Create the prompts directory relative to the script location
         prompts_dir = os.path.join(script_dir, "result", "prompts")
         os.makedirs(prompts_dir, exist_ok=True) 
@@ -162,7 +161,7 @@ class PromptSelector:
         for prompt, input_tokens, output_tokens, response_data in matching_prompts:
             for i in range(self.total_prompts):
                 benchmark_format.append({
-                    "Timestamp": base_timestamp + (i * 1000),  # Increment by 1000 for each prompt
+                    "Timestamp": base_timestamp + (i * 1000),  
                     "Requests": [{
                         "Prompt": prompt,
                         "Prompt Length": input_tokens,
